@@ -1,0 +1,7 @@
+You are a biomedical expert.
+Answer ONLY "YES" or "NO".
+
+Is the following paper related to head and neck cancer
+(including oral, laryngeal, tonsil, oropharynx, pharyngeal, larynx,
+hypopharynx, nasopharynx, nasal, thyroid, head and neck skin SCC,
+salivary gland cancers, rare head and neck cancer)?
