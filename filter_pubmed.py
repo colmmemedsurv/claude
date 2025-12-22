@@ -9,9 +9,43 @@ import xml.etree.ElementTree as ET
 # --------------------------------------------------
 # CONFIGURATION
 # --------------------------------------------------
-# Your complex PubMed search query
-# Note: The original "last 7 days"[crdt] is automatically handled below
-PUBMED_SEARCH_QUERY = """(("Lancet Oncol"[ta] OR "Nat Rev Clin Oncol"[ta] OR "Nat Cancer"[ta] OR "Cancer Discov"[ta] OR "Cancer Cell"[ta] OR "JAMA Oncol"[ta] OR "Ann Oncol"[ta] OR "ESMO Open"[ta] OR "Clin Cancer Res"[ta] OR "Cancer"[ta] OR "Oncologist"[ta] OR "Br J Cancer"[ta] OR "Cancer Res"[ta] OR "Int J Cancer"[ta] OR "Cancer Treat Rev"[ta] OR "J Geriatr Oncol"[ta] OR "JCO Oncol Pract"[ta] OR "JCO Oncol Adv"[ta] OR "JCO Precis Oncol"[ta] OR "Int J Radiat Oncol Biol Phys"[ta] OR "Radiother Oncol"[ta] OR "JAMA Otolaryngol Head Neck Surg"[ta] OR "Ann Otol Rhinol Laryngol"[ta] OR "Head Neck"[ta] OR "Oral Oncol"[ta] OR "Oral Dis"[ta] OR "J Oral Maxillofac Surg"[ta] OR "Laryngoscope"[ta] OR "Am J Otolaryngol"[ta] OR "Thyroid"[ta] OR "Lancet Diabetes Endocrinol"[ta] OR "N Engl J Med"[ta] OR "Lancet"[ta] OR "JAMA"[ta] OR "BMJ"[ta] OR "Nat Med"[ta] OR "PLoS Med"[ta] OR "Lancet Healthy Longev"[ta] OR "Nat Commun"[ta] OR "Oncogene"[ta] OR "J Clin Oncol"[ta] OR "J Natl Cancer Inst"[ta] OR "Otolaryngol Head Neck Surg"[ta] OR "ESMO Rare Cancers"[ta]) AND ("Head and Neck"[tiab] OR "HNSCC"[tiab] OR "SCCHN"[tiab] OR "Oral"[tiab] OR "Mouth"[tiab] OR "Lip"[tiab] OR "Tongue"[tiab] OR "Gingival"[tiab] OR "Palate"[tiab] OR "Pharynx"[tiab] OR "Pharyngeal"[tiab] OR "Nasopharynx"[tiab] OR "Oropharynx"[tiab] OR "Hypopharynx"[tiab] OR "Larynx"[tiab] OR "Laryngeal"[tiab] OR "Epiglottis"[tiab] OR "Voice Box"[tiab] OR "Sino-nasal"[tiab] OR "Paranasal"[tiab] OR "Maxillary Sinus"[tiab] OR "Ethmoid Sinus"[tiab] OR "Salivary"[tiab] OR "Parotid"[tiab] OR "Submandibular"[tiab] OR "Thyroid"[tiab] OR "Parathyroid"[tiab] OR "Skull Base"[tiab] OR "Esthesioneuroblastoma"[tiab] OR "Olfactory Neuroblastoma"[tiab] OR "Chordoma"[tiab] OR "Nasopharyngeal Carcinoma"[tiab] OR "SNUC"[tiab] OR "NUT Carcinoma"[tiab] OR "Ameloblastoma"[tiab])) NOT ("Case Reports"[pt] OR "Letter"[pt] OR "Comment"[pt] OR "Published Erratum"[pt])"""
+# Read PubMed search query from file
+def load_search_query():
+    """Load PubMed search query from pubmedsearchterm.txt"""
+    search_file = 'pubmedsearchterm.txt'
+    try:
+        with open(search_file, 'r', encoding='utf-8') as f:
+            query = f.read().strip()
+        print(f"✓ Loaded search query from {search_file}")
+        return query
+    except FileNotFoundError:
+        print(f"❌ ERROR: {search_file} not found!")
+        print(f"Please create {search_file} in the root directory with your PubMed search query.")
+        raise
+    except Exception as e:
+        print(f"❌ ERROR reading {search_file}: {e}")
+        raise
+
+# Read OpenAI classification instructions from file
+def load_openai_instructions():
+    """Load OpenAI classification instructions from openaiinstructions.txt"""
+    instructions_file = 'openaiinstructions.txt'
+    try:
+        with open(instructions_file, 'r', encoding='utf-8') as f:
+            instructions = f.read().strip()
+        print(f"✓ Loaded OpenAI instructions from {instructions_file}")
+        return instructions
+    except FileNotFoundError:
+        print(f"❌ ERROR: {instructions_file} not found!")
+        print(f"Please create {instructions_file} in the root directory with your classification instructions.")
+        raise
+    except Exception as e:
+        print(f"❌ ERROR reading {instructions_file}: {e}")
+        raise
+
+# Load configuration from files
+PUBMED_SEARCH_QUERY = load_search_query()
+OPENAI_INSTRUCTIONS = load_openai_instructions()
 
 MAX_RESULTS = 100
 DAYS_BACK = 7  # Filter to last 7 days
@@ -241,20 +275,16 @@ def fetch_paper_details(pmids: list) -> list:
 # --------------------------------------------------
 # OPENAI CLASSIFICATION
 # --------------------------------------------------
-def is_head_and_neck_cancer(paper: dict) -> bool:
+def is_relevant_paper(paper: dict) -> bool:
     """
-    Use OpenAI to classify if a paper is related to head and neck cancer.
+    Use OpenAI to classify if a paper matches the criteria.
+    Uses instructions from openaiinstructions.txt
     """
     text = f"Title: {paper['title']}\n\nAbstract: {paper['abstract']}"
     
-    prompt = f"""You are a biomedical expert.
-Answer ONLY "YES" or "NO".
+    prompt = f"""{OPENAI_INSTRUCTIONS}
 
-Is the following paper related to head and neck cancer
-(including oral, laryngeal, tonsil, oropharynx, pharyngeal, larynx,
-hypopharynx, nasopharynx, nasal, thyroid, head and neck skin SCC,
-salivary gland cancers, rare head and neck cancer)?
-
+Paper:
 {text}
 """
 
@@ -436,7 +466,7 @@ def main():
         print(f"\n[{i}/{len(papers)}] {paper['title'][:70]}...")
         
         try:
-            if is_head_and_neck_cancer(paper):
+            if is_relevant_paper(paper):
                 add_paper_to_channel(accepted_channel, paper)
                 accepted_count += 1
                 print("  → ✓ ACCEPTED")
