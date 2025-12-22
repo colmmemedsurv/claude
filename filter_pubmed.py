@@ -1,233 +1,192 @@
 import os
 import openai
-import feedparser
 import requests
 from lxml import etree
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
-import json
+import xml.etree.ElementTree as ET
 
 # --------------------------------------------------
 # CONFIGURATION
 # --------------------------------------------------
-RSS_FEED_URL = (
-    "https://pubmed.ncbi.nlm.nih.gov/rss/search/"
-    "1FKYAX__W2XmZZnH7wCJZ2gjg5p61zj0lAum4ErUZK11BzSsdZ/"
-    "?limit=100"
-)
+# Your complex PubMed search query
+# Note: The original "last 7 days"[crdt] is automatically handled below
+PUBMED_SEARCH_QUERY = """(("Lancet Oncol"[ta] OR "Nat Rev Clin Oncol"[ta] OR "Nat Cancer"[ta] OR "Cancer Discov"[ta] OR "Cancer Cell"[ta] OR "JAMA Oncol"[ta] OR "Ann Oncol"[ta] OR "ESMO Open"[ta] OR "Clin Cancer Res"[ta] OR "Cancer"[ta] OR "Oncologist"[ta] OR "Br J Cancer"[ta] OR "Cancer Res"[ta] OR "Int J Cancer"[ta] OR "Cancer Treat Rev"[ta] OR "J Geriatr Oncol"[ta] OR "JCO Oncol Pract"[ta] OR "JCO Oncol Adv"[ta] OR "JCO Precis Oncol"[ta] OR "Int J Radiat Oncol Biol Phys"[ta] OR "Radiother Oncol"[ta] OR "JAMA Otolaryngol Head Neck Surg"[ta] OR "Ann Otol Rhinol Laryngol"[ta] OR "Head Neck"[ta] OR "Oral Oncol"[ta] OR "Oral Dis"[ta] OR "J Oral Maxillofac Surg"[ta] OR "Laryngoscope"[ta] OR "Am J Otolaryngol"[ta] OR "Thyroid"[ta] OR "Lancet Diabetes Endocrinol"[ta] OR "N Engl J Med"[ta] OR "Lancet"[ta] OR "JAMA"[ta] OR "BMJ"[ta] OR "Nat Med"[ta] OR "PLoS Med"[ta] OR "Lancet Healthy Longev"[ta] OR "Nat Commun"[ta] OR "Oncogene"[ta] OR "J Clin Oncol"[ta] OR "J Natl Cancer Inst"[ta] OR "Otolaryngol Head Neck Surg"[ta] OR "ESMO Rare Cancers"[ta]) AND ("Head and Neck"[tiab] OR "HNSCC"[tiab] OR "SCCHN"[tiab] OR "Oral"[tiab] OR "Mouth"[tiab] OR "Lip"[tiab] OR "Tongue"[tiab] OR "Gingival"[tiab] OR "Palate"[tiab] OR "Pharynx"[tiab] OR "Pharyngeal"[tiab] OR "Nasopharynx"[tiab] OR "Oropharynx"[tiab] OR "Hypopharynx"[tiab] OR "Larynx"[tiab] OR "Laryngeal"[tiab] OR "Epiglottis"[tiab] OR "Voice Box"[tiab] OR "Sino-nasal"[tiab] OR "Paranasal"[tiab] OR "Maxillary Sinus"[tiab] OR "Ethmoid Sinus"[tiab] OR "Salivary"[tiab] OR "Parotid"[tiab] OR "Submandibular"[tiab] OR "Thyroid"[tiab] OR "Parathyroid"[tiab] OR "Skull Base"[tiab] OR "Esthesioneuroblastoma"[tiab] OR "Olfactory Neuroblastoma"[tiab] OR "Chordoma"[tiab] OR "Nasopharyngeal Carcinoma"[tiab] OR "SNUC"[tiab] OR "NUT Carcinoma"[tiab] OR "Ameloblastoma"[tiab])) NOT ("Case Reports"[pt] OR "Letter"[pt] OR "Comment"[pt] OR "Published Erratum"[pt])"""
+
+MAX_RESULTS = 100
+DAYS_BACK = 7  # Filter to last 7 days
 
 OUTPUT_ACCEPTED = "output/filtered_feed.xml"
 OUTPUT_REJECTED = "output/rejected_feed.xml"
-CACHE_FILE = "feed_cache.json"
 
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
-# --------------------------------------------------
-# FETCH PUBMED RSS WITH MULTIPLE FALLBACK METHODS
-# --------------------------------------------------
-def fetch_via_rss2json(url: str) -> feedparser.FeedParserDict:
-    """
-    Fetch RSS through rss2json.com API service as a workaround for PubMed blocking.
-    This service acts as a proxy and can bypass IP blocks.
-    """
-    print("Attempting to fetch via rss2json.com proxy...")
-    
-    api_url = f"https://api.rss2json.com/v1/api.json?rss_url={requests.utils.quote(url)}&api_key=yourownkeyisfree&count=100"
-    
-    try:
-        response = requests.get(api_url, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        
-        if data.get('status') != 'ok':
-            raise Exception(f"rss2json error: {data.get('message', 'Unknown error')}")
-        
-        # Convert rss2json format to feedparser format
-        feed = feedparser.FeedParserDict()
-        feed.entries = []
-        
-        for item in data.get('items', []):
-            entry = feedparser.FeedParserDict()
-            entry.title = item.get('title', '')
-            entry.link = item.get('link', '')
-            entry.id = item.get('guid', item.get('link', ''))
-            entry.summary = item.get('description', '')
-            entry.published = item.get('pubDate', '')
-            feed.entries.append(entry)
-        
-        print(f"✓ Successfully fetched {len(feed.entries)} entries via rss2json")
-        return feed
-        
-    except Exception as e:
-        print(f"✗ rss2json method failed: {e}")
-        raise
+# PubMed E-utilities API endpoints
+ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
 
-def fetch_via_allorigins(url: str) -> feedparser.FeedParserDict:
-    """
-    Fetch RSS through allorigins.win proxy service.
-    Another CORS proxy that can help bypass blocks.
-    """
-    print("Attempting to fetch via allorigins.win proxy...")
-    
-    proxy_url = f"https://api.allorigins.win/raw?url={requests.utils.quote(url)}"
-    
-    try:
-        response = requests.get(proxy_url, timeout=30)
-        response.raise_for_status()
-        
-        feed = feedparser.parse(response.text)
-        
-        if not feed.entries:
-            raise Exception("No entries found in feed")
-        
-        print(f"✓ Successfully fetched {len(feed.entries)} entries via allorigins")
-        return feed
-        
-    except Exception as e:
-        print(f"✗ allorigins method failed: {e}")
-        raise
+# Email for NCBI API usage (required)
+YOUR_EMAIL = "colmme.medsurv@gmail.com"
 
-def fetch_direct(url: str) -> feedparser.FeedParserDict:
+# --------------------------------------------------
+# FETCH FROM PUBMED E-UTILITIES API
+# --------------------------------------------------
+def search_pubmed(query: str, max_results: int = 100, days_back: int = 7) -> list:
     """
-    Direct fetch with enhanced headers (may work sometimes).
+    Search PubMed using the official E-utilities API.
+    Returns a list of PubMed IDs (PMIDs).
+    Automatically filters to last N days using datetype=crdt (creation date).
     """
-    print("Attempting direct fetch with enhanced headers...")
+    # Calculate date range (last N days)
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days_back)
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/rss+xml, application/xml, text/xml, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Cache-Control": "max-age=0",
+    # Format dates as YYYY/MM/DD for PubMed
+    mindate = start_date.strftime("%Y/%m/%d")
+    maxdate = end_date.strftime("%Y/%m/%d")
+    
+    print(f"Searching PubMed for papers from {mindate} to {maxdate}")
+    print(f"Query: {query[:100]}..." if len(query) > 100 else f"Query: {query}")
+    print(f"Maximum results: {max_results}")
+    
+    params = {
+        'db': 'pubmed',
+        'term': query,
+        'retmax': max_results,
+        'retmode': 'json',
+        'sort': 'pub_date',  # Most recent first
+        'datetype': 'crdt',  # Creation date (when added to PubMed)
+        'mindate': mindate,
+        'maxdate': maxdate,
+        'email': YOUR_EMAIL,
+        'tool': 'pubmed_hnc_filter',
     }
     
     try:
-        response = requests.get(url, headers=headers, timeout=30)
+        response = requests.get(ESEARCH_URL, params=params, timeout=30)
         response.raise_for_status()
         
-        feed = feedparser.parse(response.text)
+        data = response.json()
+        pmids = data['esearchresult']['idlist']
         
-        if not feed.entries:
-            raise Exception("No entries found in feed")
+        print(f"✓ Found {len(pmids)} papers from the last {days_back} days")
         
-        print(f"✓ Successfully fetched {len(feed.entries)} entries directly")
-        return feed
+        if len(pmids) == 0:
+            print(f"⚠ No papers found. This could mean:")
+            print(f"  - No new papers matching your criteria in the last {days_back} days")
+            print(f"  - Try increasing DAYS_BACK or checking your search query")
+        
+        return pmids
         
     except Exception as e:
-        print(f"✗ Direct method failed: {e}")
+        print(f"✗ Error searching PubMed: {e}")
         raise
 
-def load_from_cache() -> feedparser.FeedParserDict:
+def fetch_paper_details(pmids: list) -> list:
     """
-    Load feed from cache file as last resort.
+    Fetch full details for a list of PMIDs using E-utilities.
+    Returns list of paper dictionaries.
     """
-    print("Attempting to load from cache...")
+    if not pmids:
+        return []
     
-    if not os.path.exists(CACHE_FILE):
-        raise Exception("No cache file found")
+    print(f"\nFetching details for {len(pmids)} papers...")
+    
+    # E-utilities allows fetching multiple papers at once (max 200 at a time)
+    pmid_str = ','.join(pmids)
+    
+    params = {
+        'db': 'pubmed',
+        'id': pmid_str,
+        'retmode': 'xml',
+        'email': YOUR_EMAIL,
+        'tool': 'pubmed_hnc_filter',
+    }
     
     try:
-        with open(CACHE_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        response = requests.get(EFETCH_URL, params=params, timeout=60)
+        response.raise_for_status()
         
-        feed = feedparser.FeedParserDict()
-        feed.entries = []
+        # Parse XML response
+        root = ET.fromstring(response.content)
         
-        for item in data:
-            entry = feedparser.FeedParserDict()
-            entry.title = item.get('title', '')
-            entry.link = item.get('link', '')
-            entry.id = item.get('id', '')
-            entry.summary = item.get('summary', '')
-            entry.published = item.get('published', '')
-            feed.entries.append(entry)
+        papers = []
+        articles = root.findall('.//PubmedArticle')
         
-        print(f"✓ Loaded {len(feed.entries)} entries from cache")
-        return feed
+        for article in articles:
+            try:
+                # Extract PMID
+                pmid = article.find('.//PMID')
+                pmid_text = pmid.text if pmid is not None else 'Unknown'
+                
+                # Extract title
+                title_elem = article.find('.//ArticleTitle')
+                title = ''.join(title_elem.itertext()) if title_elem is not None else 'No title'
+                
+                # Extract abstract
+                abstract_elem = article.find('.//Abstract')
+                abstract = ''
+                if abstract_elem is not None:
+                    abstract_texts = []
+                    for abstract_text in abstract_elem.findall('.//AbstractText'):
+                        label = abstract_text.get('Label', '')
+                        text = ''.join(abstract_text.itertext())
+                        if label:
+                            abstract_texts.append(f"{label}: {text}")
+                        else:
+                            abstract_texts.append(text)
+                    abstract = ' '.join(abstract_texts)
+                
+                # Extract publication date
+                pub_date = article.find('.//PubDate')
+                date_str = ''
+                if pub_date is not None:
+                    year = pub_date.find('Year')
+                    month = pub_date.find('Month')
+                    day = pub_date.find('Day')
+                    
+                    year_text = year.text if year is not None else ''
+                    month_text = month.text if month is not None else ''
+                    day_text = day.text if day is not None else ''
+                    
+                    date_str = f"{year_text}-{month_text}-{day_text}".strip('-')
+                
+                # Extract journal
+                journal_elem = article.find('.//Journal/Title')
+                journal = journal_elem.text if journal_elem is not None else 'Unknown Journal'
+                
+                # Construct PubMed URL
+                pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid_text}/"
+                
+                papers.append({
+                    'pmid': pmid_text,
+                    'title': title,
+                    'abstract': abstract,
+                    'journal': journal,
+                    'date': date_str,
+                    'url': pubmed_url,
+                })
+                
+            except Exception as e:
+                print(f"⚠ Warning: Could not parse article: {e}")
+                continue
+        
+        print(f"✓ Successfully parsed {len(papers)} papers")
+        return papers
         
     except Exception as e:
-        print(f"✗ Cache load failed: {e}")
+        print(f"✗ Error fetching paper details: {e}")
         raise
-
-def save_to_cache(feed: feedparser.FeedParserDict):
-    """
-    Save feed to cache for future use.
-    """
-    try:
-        cache_data = []
-        for entry in feed.entries:
-            cache_data.append({
-                'title': entry.title,
-                'link': entry.link,
-                'id': entry.id,
-                'summary': entry.get('summary', ''),
-                'published': entry.get('published', ''),
-            })
-        
-        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(cache_data, f, indent=2, ensure_ascii=False)
-        
-        print(f"✓ Saved {len(cache_data)} entries to cache")
-    except Exception as e:
-        print(f"⚠ Warning: Could not save cache: {e}")
-
-def fetch_pubmed_rss(url: str) -> feedparser.FeedParserDict:
-    """
-    Fetch PubMed RSS with multiple fallback methods.
-    Tries in order: rss2json, allorigins, direct, cache
-    """
-    print("=" * 60)
-    print(f"Fetching RSS feed from: {url}")
-    print("=" * 60)
-    
-    methods = [
-        ("RSS2JSON Proxy", fetch_via_rss2json),
-        ("AllOrigins Proxy", fetch_via_allorigins),
-        ("Direct Fetch", fetch_direct),
-        ("Cache Fallback", load_from_cache),
-    ]
-    
-    last_error = None
-    
-    for method_name, method_func in methods:
-        try:
-            print(f"\n[Method {methods.index((method_name, method_func)) + 1}/4] {method_name}")
-            feed = method_func(url)
-            
-            if feed.entries:
-                print(f"✓ SUCCESS: Retrieved {len(feed.entries)} entries using {method_name}")
-                
-                # Save to cache for future use (unless we're loading from cache)
-                if method_name != "Cache Fallback":
-                    save_to_cache(feed)
-                
-                return feed
-            else:
-                print(f"✗ {method_name} returned no entries")
-                
-        except Exception as e:
-            last_error = e
-            print(f"✗ {method_name} failed: {str(e)[:100]}")
-            continue
-    
-    # All methods failed
-    print("\n" + "=" * 60)
-    print("ERROR: All fetch methods failed!")
-    print("=" * 60)
-    raise RuntimeError(
-        f"Could not fetch RSS feed using any method. "
-        f"Last error: {last_error}"
-    )
 
 # --------------------------------------------------
 # OPENAI CLASSIFICATION
 # --------------------------------------------------
-def is_head_and_neck_cancer(text: str) -> bool:
+def is_head_and_neck_cancer(paper: dict) -> bool:
     """
     Use OpenAI to classify if a paper is related to head and neck cancer.
     """
+    text = f"Title: {paper['title']}\n\nAbstract: {paper['abstract']}"
+    
     prompt = f"""You are a biomedical expert.
 Answer ONLY "YES" or "NO".
 
@@ -236,7 +195,6 @@ Is the following paper related to head and neck cancer
 hypopharynx, nasopharynx, nasal, thyroid, head and neck skin SCC,
 salivary gland cancers, rare head and neck cancer)?
 
-Paper:
 {text}
 """
 
@@ -251,12 +209,11 @@ Paper:
         return answer == "YES"
         
     except Exception as e:
-        print(f"⚠ Error calling OpenAI API: {e}")
-        # Default to accepting to be safe
-        return True
+        print(f"⚠ OpenAI API error: {e}")
+        return True  # Default to accepting
 
 # --------------------------------------------------
-# RSS HELPERS
+# RSS GENERATION
 # --------------------------------------------------
 def create_channel(title: str, link: str, description: str):
     """Create an RSS channel structure."""
@@ -264,118 +221,166 @@ def create_channel(title: str, link: str, description: str):
     channel = etree.SubElement(rss, "channel")
 
     etree.SubElement(channel, "title").text = title
-    etree.SubElement(channel, "link").text = link
+    etree.SubElement(channel, "link").text = "https://pubmed.ncbi.nlm.nih.gov"
     etree.SubElement(channel, "description").text = description
     etree.SubElement(channel, "lastBuildDate").text = datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S +0000")
 
     return rss, channel
 
-def add_item(channel, entry):
-    """Add an RSS item to a channel."""
+def add_paper_to_channel(channel, paper: dict):
+    """Add a paper to an RSS channel."""
     item = etree.SubElement(channel, "item")
-    etree.SubElement(item, "title").text = entry.title
-    etree.SubElement(item, "link").text = entry.link
-    etree.SubElement(item, "guid").text = entry.id
-    etree.SubElement(item, "description").text = entry.get("summary", "")
-    etree.SubElement(item, "pubDate").text = entry.get("published", "")
+    etree.SubElement(item, "title").text = paper['title']
+    etree.SubElement(item, "link").text = paper['url']
+    etree.SubElement(item, "guid").text = paper['url']
+    
+    # Create description with abstract and metadata
+    description = f"<b>Journal:</b> {paper['journal']}<br/><br/>"
+    if paper['abstract']:
+        description += f"<b>Abstract:</b> {paper['abstract']}"
+    else:
+        description += "<i>No abstract available</i>"
+    
+    etree.SubElement(item, "description").text = description
+    etree.SubElement(item, "pubDate").text = paper['date']
 
 # --------------------------------------------------
 # MAIN
 # --------------------------------------------------
 def main():
     print("\n" + "=" * 60)
-    print("PubMed RSS Feed Filter - Head and Neck Cancer")
+    print("PubMed Filter - Head and Neck Cancer")
+    print("Using PubMed E-utilities API")
+    print(f"Filtering to last {DAYS_BACK} days")
     print("=" * 60)
     
-    # Fetch the feed with fallback methods
+    # Step 1: Search PubMed with date filtering
     try:
-        feed = fetch_pubmed_rss(RSS_FEED_URL)
+        pmids = search_pubmed(PUBMED_SEARCH_QUERY, MAX_RESULTS, DAYS_BACK)
     except Exception as e:
-        print(f"\n❌ FATAL ERROR: {e}")
-        print("\nTroubleshooting suggestions:")
-        print("1. Check if the RSS feed URL works in your browser")
-        print("2. Try running this script locally (not on GitHub Actions)")
-        print("3. Check TROUBLESHOOTING.md for more solutions")
+        print(f"\n❌ Failed to search PubMed: {e}")
         raise
-
-    if not feed.entries:
-        raise RuntimeError("Feed was fetched but contains no entries")
-
-    print(f"\n✓ Successfully retrieved {len(feed.entries)} papers to process")
-
-    # Create output RSS structures
+    
+    if not pmids:
+        print(f"\n⚠ No papers found in the last {DAYS_BACK} days matching your criteria")
+        print("\nThis is normal if:")
+        print(f"  - Your journals haven't published relevant papers recently")
+        print(f"  - The search criteria are very specific")
+        print(f"\nConsider:")
+        print(f"  - Increasing DAYS_BACK in the configuration")
+        print(f"  - Checking if the search query is correct")
+        
+        # Create empty output files
+        os.makedirs("output", exist_ok=True)
+        
+        accepted_rss, accepted_channel = create_channel(
+            "Filtered PubMed – Head and Neck Cancer",
+            "https://pubmed.ncbi.nlm.nih.gov",
+            f"Papers classified as related to head and neck cancer (last {DAYS_BACK} days)"
+        )
+        
+        etree.ElementTree(accepted_rss).write(
+            OUTPUT_ACCEPTED,
+            pretty_print=True,
+            xml_declaration=True,
+            encoding="UTF-8"
+        )
+        
+        rejected_rss, rejected_channel = create_channel(
+            "Rejected PubMed Papers – Not Head and Neck Cancer",
+            "https://pubmed.ncbi.nlm.nih.gov",
+            f"Papers rejected by the automated classifier (last {DAYS_BACK} days)"
+        )
+        
+        etree.ElementTree(rejected_rss).write(
+            OUTPUT_REJECTED,
+            pretty_print=True,
+            xml_declaration=True,
+            encoding="UTF-8"
+        )
+        
+        print(f"\n✓ Created empty output files")
+        return
+    
+    # Step 2: Fetch paper details
+    try:
+        papers = fetch_paper_details(pmids)
+    except Exception as e:
+        print(f"\n❌ Failed to fetch paper details: {e}")
+        raise
+    
+    if not papers:
+        print("\n⚠ Could not retrieve any paper details")
+        return
+    
+    # Step 3: Create RSS structures
     accepted_rss, accepted_channel = create_channel(
         "Filtered PubMed – Head and Neck Cancer",
-        RSS_FEED_URL,
-        "Papers classified as related to head and neck cancer"
+        "https://pubmed.ncbi.nlm.nih.gov",
+        f"Papers classified as related to head and neck cancer (last {DAYS_BACK} days)"
     )
 
     rejected_rss, rejected_channel = create_channel(
         "Rejected PubMed Papers – Not Head and Neck Cancer",
-        RSS_FEED_URL,
-        "Papers rejected by the automated classifier"
+        "https://pubmed.ncbi.nlm.nih.gov",
+        f"Papers rejected by the automated classifier (last {DAYS_BACK} days)"
     )
 
-    accepted_count = 0
-    rejected_count = 0
-    error_count = 0
-
-    # Process each entry
+    # Step 4: Classify and filter papers
     print("\n" + "=" * 60)
-    print("Processing papers with OpenAI classification...")
+    print("Classifying papers with OpenAI...")
     print("=" * 60)
     
-    for i, entry in enumerate(feed.entries, 1):
-        print(f"\n[{i}/{len(feed.entries)}] {entry.title[:70]}...")
+    accepted_count = 0
+    rejected_count = 0
+    
+    for i, paper in enumerate(papers, 1):
+        print(f"\n[{i}/{len(papers)}] {paper['title'][:70]}...")
         
-        text_blob = f"{entry.title}\n\n{entry.get('summary', '')}"
-
         try:
-            if is_head_and_neck_cancer(text_blob):
-                add_item(accepted_channel, entry)
+            if is_head_and_neck_cancer(paper):
+                add_paper_to_channel(accepted_channel, paper)
                 accepted_count += 1
-                print("  → ✓ ACCEPTED (relevant)")
+                print("  → ✓ ACCEPTED")
             else:
-                add_item(rejected_channel, entry)
+                add_paper_to_channel(rejected_channel, paper)
                 rejected_count += 1
-                print("  → ✗ REJECTED (not relevant)")
-                
+                print("  → ✗ REJECTED")
+            
             # Rate limiting
             time.sleep(0.5)
             
         except Exception as e:
             print(f"  → ⚠ ERROR: {e}")
-            add_item(rejected_channel, entry)
-            error_count += 1
-
-    # Create output directory
+            add_paper_to_channel(rejected_channel, paper)
+            rejected_count += 1
+    
+    # Step 5: Write output files
     os.makedirs("output", exist_ok=True)
-
-    # Write output files
+    
     etree.ElementTree(accepted_rss).write(
         OUTPUT_ACCEPTED,
         pretty_print=True,
         xml_declaration=True,
         encoding="UTF-8"
     )
-
+    
     etree.ElementTree(rejected_rss).write(
         OUTPUT_REJECTED,
         pretty_print=True,
         xml_declaration=True,
         encoding="UTF-8"
     )
-
+    
     # Summary
     print("\n" + "=" * 60)
     print("✓ COMPLETED SUCCESSFULLY")
     print("=" * 60)
     print(f"Accepted papers:  {accepted_count}")
     print(f"Rejected papers:  {rejected_count}")
-    print(f"Errors:           {error_count}")
-    print(f"Total processed:  {len(feed.entries)}")
+    print(f"Total processed:  {len(papers)}")
     print("=" * 60)
-    print(f"\n📁 Output files created:")
+    print(f"\n📁 Output files:")
     print(f"   • {OUTPUT_ACCEPTED}")
     print(f"   • {OUTPUT_REJECTED}")
     print()
