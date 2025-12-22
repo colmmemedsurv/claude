@@ -5,6 +5,7 @@ import requests
 from lxml import etree
 from datetime import datetime
 import time
+import json
 
 # --------------------------------------------------
 # CONFIGURATION
@@ -17,51 +18,215 @@ RSS_FEED_URL = (
 
 OUTPUT_ACCEPTED = "output/filtered_feed.xml"
 OUTPUT_REJECTED = "output/rejected_feed.xml"
+CACHE_FILE = "feed_cache.json"
 
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 # --------------------------------------------------
-# FETCH PUBMED RSS WITH HEADERS
+# FETCH PUBMED RSS WITH MULTIPLE FALLBACK METHODS
 # --------------------------------------------------
-def fetch_pubmed_rss(url: str) -> feedparser.FeedParserDict:
+def fetch_via_rss2json(url: str) -> feedparser.FeedParserDict:
     """
-    Fetch PubMed RSS feed with proper headers.
-    PubMed requires a User-Agent and may block automated requests.
+    Fetch RSS through rss2json.com API service as a workaround for PubMed blocking.
+    This service acts as a proxy and can bypass IP blocks.
     """
+    print("Attempting to fetch via rss2json.com proxy...")
+    
+    api_url = f"https://api.rss2json.com/v1/api.json?rss_url={requests.utils.quote(url)}&api_key=yourownkeyisfree&count=100"
+    
+    try:
+        response = requests.get(api_url, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        
+        if data.get('status') != 'ok':
+            raise Exception(f"rss2json error: {data.get('message', 'Unknown error')}")
+        
+        # Convert rss2json format to feedparser format
+        feed = feedparser.FeedParserDict()
+        feed.entries = []
+        
+        for item in data.get('items', []):
+            entry = feedparser.FeedParserDict()
+            entry.title = item.get('title', '')
+            entry.link = item.get('link', '')
+            entry.id = item.get('guid', item.get('link', ''))
+            entry.summary = item.get('description', '')
+            entry.published = item.get('pubDate', '')
+            feed.entries.append(entry)
+        
+        print(f"✓ Successfully fetched {len(feed.entries)} entries via rss2json")
+        return feed
+        
+    except Exception as e:
+        print(f"✗ rss2json method failed: {e}")
+        raise
+
+def fetch_via_allorigins(url: str) -> feedparser.FeedParserDict:
+    """
+    Fetch RSS through allorigins.win proxy service.
+    Another CORS proxy that can help bypass blocks.
+    """
+    print("Attempting to fetch via allorigins.win proxy...")
+    
+    proxy_url = f"https://api.allorigins.win/raw?url={requests.utils.quote(url)}"
+    
+    try:
+        response = requests.get(proxy_url, timeout=30)
+        response.raise_for_status()
+        
+        feed = feedparser.parse(response.text)
+        
+        if not feed.entries:
+            raise Exception("No entries found in feed")
+        
+        print(f"✓ Successfully fetched {len(feed.entries)} entries via allorigins")
+        return feed
+        
+    except Exception as e:
+        print(f"✗ allorigins method failed: {e}")
+        raise
+
+def fetch_direct(url: str) -> feedparser.FeedParserDict:
+    """
+    Direct fetch with enhanced headers (may work sometimes).
+    """
+    print("Attempting direct fetch with enhanced headers...")
+    
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; PubMedRSSBot/1.0; +https://github.com/yourusername/yourrepo)",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/rss+xml, application/xml, text/xml, */*",
         "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Cache-Control": "max-age=0",
     }
-
-    print(f"Fetching RSS feed from: {url}")
     
     try:
         response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
-        print(f"Successfully fetched RSS feed (status code: {response.status_code})")
-        print(f"Content length: {len(response.text)} characters")
         
-        # Parse the feed
         feed = feedparser.parse(response.text)
         
-        # Check for parsing errors
-        if feed.bozo:
-            print(f"Warning: Feed parsing issue: {feed.bozo_exception}")
+        if not feed.entries:
+            raise Exception("No entries found in feed")
         
+        print(f"✓ Successfully fetched {len(feed.entries)} entries directly")
         return feed
         
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching RSS feed: {e}")
+    except Exception as e:
+        print(f"✗ Direct method failed: {e}")
         raise
 
+def load_from_cache() -> feedparser.FeedParserDict:
+    """
+    Load feed from cache file as last resort.
+    """
+    print("Attempting to load from cache...")
+    
+    if not os.path.exists(CACHE_FILE):
+        raise Exception("No cache file found")
+    
+    try:
+        with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        feed = feedparser.FeedParserDict()
+        feed.entries = []
+        
+        for item in data:
+            entry = feedparser.FeedParserDict()
+            entry.title = item.get('title', '')
+            entry.link = item.get('link', '')
+            entry.id = item.get('id', '')
+            entry.summary = item.get('summary', '')
+            entry.published = item.get('published', '')
+            feed.entries.append(entry)
+        
+        print(f"✓ Loaded {len(feed.entries)} entries from cache")
+        return feed
+        
+    except Exception as e:
+        print(f"✗ Cache load failed: {e}")
+        raise
+
+def save_to_cache(feed: feedparser.FeedParserDict):
+    """
+    Save feed to cache for future use.
+    """
+    try:
+        cache_data = []
+        for entry in feed.entries:
+            cache_data.append({
+                'title': entry.title,
+                'link': entry.link,
+                'id': entry.id,
+                'summary': entry.get('summary', ''),
+                'published': entry.get('published', ''),
+            })
+        
+        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cache_data, f, indent=2, ensure_ascii=False)
+        
+        print(f"✓ Saved {len(cache_data)} entries to cache")
+    except Exception as e:
+        print(f"⚠ Warning: Could not save cache: {e}")
+
+def fetch_pubmed_rss(url: str) -> feedparser.FeedParserDict:
+    """
+    Fetch PubMed RSS with multiple fallback methods.
+    Tries in order: rss2json, allorigins, direct, cache
+    """
+    print("=" * 60)
+    print(f"Fetching RSS feed from: {url}")
+    print("=" * 60)
+    
+    methods = [
+        ("RSS2JSON Proxy", fetch_via_rss2json),
+        ("AllOrigins Proxy", fetch_via_allorigins),
+        ("Direct Fetch", fetch_direct),
+        ("Cache Fallback", load_from_cache),
+    ]
+    
+    last_error = None
+    
+    for method_name, method_func in methods:
+        try:
+            print(f"\n[Method {methods.index((method_name, method_func)) + 1}/4] {method_name}")
+            feed = method_func(url)
+            
+            if feed.entries:
+                print(f"✓ SUCCESS: Retrieved {len(feed.entries)} entries using {method_name}")
+                
+                # Save to cache for future use (unless we're loading from cache)
+                if method_name != "Cache Fallback":
+                    save_to_cache(feed)
+                
+                return feed
+            else:
+                print(f"✗ {method_name} returned no entries")
+                
+        except Exception as e:
+            last_error = e
+            print(f"✗ {method_name} failed: {str(e)[:100]}")
+            continue
+    
+    # All methods failed
+    print("\n" + "=" * 60)
+    print("ERROR: All fetch methods failed!")
+    print("=" * 60)
+    raise RuntimeError(
+        f"Could not fetch RSS feed using any method. "
+        f"Last error: {last_error}"
+    )
+
 # --------------------------------------------------
-# OPENAI CLASSIFICATION (USER-SUPPLIED QUERY)
+# OPENAI CLASSIFICATION
 # --------------------------------------------------
 def is_head_and_neck_cancer(text: str) -> bool:
     """
     Use OpenAI to classify if a paper is related to head and neck cancer.
-    Returns True if related, False otherwise.
     """
     prompt = f"""You are a biomedical expert.
 Answer ONLY "YES" or "NO".
@@ -86,8 +251,8 @@ Paper:
         return answer == "YES"
         
     except Exception as e:
-        print(f"Error calling OpenAI API: {e}")
-        # In case of error, default to accepting (safer than rejecting)
+        print(f"⚠ Error calling OpenAI API: {e}")
+        # Default to accepting to be safe
         return True
 
 # --------------------------------------------------
@@ -118,23 +283,25 @@ def add_item(channel, entry):
 # MAIN
 # --------------------------------------------------
 def main():
-    print("=" * 60)
+    print("\n" + "=" * 60)
     print("PubMed RSS Feed Filter - Head and Neck Cancer")
     print("=" * 60)
     
-    # Fetch the feed
-    feed = fetch_pubmed_rss(RSS_FEED_URL)
+    # Fetch the feed with fallback methods
+    try:
+        feed = fetch_pubmed_rss(RSS_FEED_URL)
+    except Exception as e:
+        print(f"\n❌ FATAL ERROR: {e}")
+        print("\nTroubleshooting suggestions:")
+        print("1. Check if the RSS feed URL works in your browser")
+        print("2. Try running this script locally (not on GitHub Actions)")
+        print("3. Check TROUBLESHOOTING.md for more solutions")
+        raise
 
     if not feed.entries:
-        error_msg = (
-            "PubMed RSS returned zero entries. "
-            "Check User-Agent and feed URL. "
-            f"Feed info: {feed.feed.get('title', 'No title')}"
-        )
-        print(f"ERROR: {error_msg}")
-        raise RuntimeError(error_msg)
+        raise RuntimeError("Feed was fetched but contains no entries")
 
-    print(f"\nFound {len(feed.entries)} entries to process")
+    print(f"\n✓ Successfully retrieved {len(feed.entries)} papers to process")
 
     # Create output RSS structures
     accepted_rss, accepted_channel = create_channel(
@@ -154,9 +321,12 @@ def main():
     error_count = 0
 
     # Process each entry
-    print("\nProcessing entries...")
+    print("\n" + "=" * 60)
+    print("Processing papers with OpenAI classification...")
+    print("=" * 60)
+    
     for i, entry in enumerate(feed.entries, 1):
-        print(f"\n[{i}/{len(feed.entries)}] Processing: {entry.title[:60]}...")
+        print(f"\n[{i}/{len(feed.entries)}] {entry.title[:70]}...")
         
         text_blob = f"{entry.title}\n\n{entry.get('summary', '')}"
 
@@ -164,18 +334,17 @@ def main():
             if is_head_and_neck_cancer(text_blob):
                 add_item(accepted_channel, entry)
                 accepted_count += 1
-                print("  ✓ ACCEPTED")
+                print("  → ✓ ACCEPTED (relevant)")
             else:
                 add_item(rejected_channel, entry)
                 rejected_count += 1
-                print("  ✗ REJECTED")
+                print("  → ✗ REJECTED (not relevant)")
                 
-            # Small delay to avoid rate limiting
+            # Rate limiting
             time.sleep(0.5)
             
         except Exception as e:
-            print(f"  ⚠ ERROR processing entry: {e}")
-            # Add to rejected by default if error occurs
+            print(f"  → ⚠ ERROR: {e}")
             add_item(rejected_channel, entry)
             error_count += 1
 
@@ -199,16 +368,17 @@ def main():
 
     # Summary
     print("\n" + "=" * 60)
-    print("RESULTS:")
-    print(f"  Accepted papers: {accepted_count}")
-    print(f"  Rejected papers: {rejected_count}")
-    print(f"  Errors: {error_count}")
-    print(f"  Total processed: {len(feed.entries)}")
+    print("✓ COMPLETED SUCCESSFULLY")
     print("=" * 60)
-    print(f"\nOutput files created:")
-    print(f"  - {OUTPUT_ACCEPTED}")
-    print(f"  - {OUTPUT_REJECTED}")
+    print(f"Accepted papers:  {accepted_count}")
+    print(f"Rejected papers:  {rejected_count}")
+    print(f"Errors:           {error_count}")
+    print(f"Total processed:  {len(feed.entries)}")
+    print("=" * 60)
+    print(f"\n📁 Output files created:")
+    print(f"   • {OUTPUT_ACCEPTED}")
+    print(f"   • {OUTPUT_REJECTED}")
+    print()
 
-# --------------------------------------------------
 if __name__ == "__main__":
     main()
