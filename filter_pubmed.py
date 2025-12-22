@@ -97,7 +97,8 @@ def search_pubmed(query: str, max_results: int = 100, days_back: int = 7) -> lis
     }
     
     try:
-        response = requests.get(ESEARCH_URL, params=params, timeout=30)
+        # Use POST instead of GET to avoid URL length limits with complex queries
+        response = requests.post(ESEARCH_URL, data=params, timeout=30)
         response.raise_for_status()
         
         data = response.json()
