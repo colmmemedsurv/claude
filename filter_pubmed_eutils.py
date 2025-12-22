@@ -137,23 +137,80 @@ def fetch_paper_details(pmids: list) -> list:
                             abstract_texts.append(text)
                     abstract = ' '.join(abstract_texts)
                 
+                # Extract authors
+                authors = []
+                author_list = article.find('.//AuthorList')
+                if author_list is not None:
+                    for author in author_list.findall('.//Author')[:10]:  # Limit to first 10 authors
+                        last_name = author.find('LastName')
+                        initials = author.find('Initials')
+                        fore_name = author.find('ForeName')
+                        
+                        if last_name is not None:
+                            if initials is not None:
+                                authors.append(f"{last_name.text} {initials.text}")
+                            elif fore_name is not None:
+                                authors.append(f"{last_name.text} {fore_name.text}")
+                            else:
+                                authors.append(last_name.text)
+                
+                author_string = ', '.join(authors) if authors else 'No authors listed'
+                if len(author_list.findall('.//Author')) > 10:
+                    author_string += ', et al.'
+                
                 # Extract publication date
                 pub_date = article.find('.//PubDate')
                 date_str = ''
+                rfc822_date = ''
+                
                 if pub_date is not None:
                     year = pub_date.find('Year')
                     month = pub_date.find('Month')
                     day = pub_date.find('Day')
                     
                     year_text = year.text if year is not None else ''
-                    month_text = month.text if month is not None else ''
-                    day_text = day.text if day is not None else ''
+                    month_text = month.text if month is not None else '01'
+                    day_text = day.text if day is not None else '01'
                     
+                    # Human-readable date
                     date_str = f"{year_text}-{month_text}-{day_text}".strip('-')
+                    
+                    # Convert to RFC 822 format for RSS (required for proper date display)
+                    try:
+                        # Convert month name to number if needed
+                        month_map = {
+                            'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04',
+                            'May': '05', 'Jun': '06', 'Jul': '07', 'Aug': '08',
+                            'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12',
+                            'January': '01', 'February': '02', 'March': '03', 'April': '04',
+                            'June': '06', 'July': '07', 'August': '08', 'September': '09',
+                            'October': '10', 'November': '11', 'December': '12'
+                        }
+                        
+                        month_num = month_map.get(month_text, month_text)
+                        
+                        if year_text and month_num and day_text:
+                            # Create proper date object
+                            from datetime import datetime as dt
+                            date_obj = dt.strptime(f"{year_text}-{month_num}-{day_text}", "%Y-%m-%d")
+                            rfc822_date = date_obj.strftime("%a, %d %b %Y 12:00:00 +0000")
+                        else:
+                            # Fallback to just year if incomplete
+                            rfc822_date = f"01 Jan {year_text} 12:00:00 +0000"
+                    except:
+                        rfc822_date = datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S +0000")
                 
                 # Extract journal
                 journal_elem = article.find('.//Journal/Title')
                 journal = journal_elem.text if journal_elem is not None else 'Unknown Journal'
+                
+                # Extract DOI
+                doi = ''
+                article_id_list = article.findall('.//ArticleId')
+                for article_id in article_id_list:
+                    if article_id.get('IdType') == 'doi':
+                        doi = article_id.text
+                        break
                 
                 # Construct PubMed URL
                 pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid_text}/"
@@ -163,7 +220,10 @@ def fetch_paper_details(pmids: list) -> list:
                     'title': title,
                     'abstract': abstract,
                     'journal': journal,
+                    'authors': author_string,
                     'date': date_str,
+                    'rfc822_date': rfc822_date,
+                    'doi': doi,
                     'url': pubmed_url,
                 })
                 
@@ -216,8 +276,14 @@ salivary gland cancers, rare head and neck cancer)?
 # RSS GENERATION
 # --------------------------------------------------
 def create_channel(title: str, link: str, description: str):
-    """Create an RSS channel structure."""
-    rss = etree.Element("rss", version="2.0")
+    """Create an RSS channel structure with Dublin Core namespace for authors."""
+    # Create RSS element with Dublin Core namespace for author metadata
+    rss = etree.Element("rss", 
+                        version="2.0",
+                        nsmap={
+                            'dc': 'http://purl.org/dc/elements/1.1/',
+                            'atom': 'http://www.w3.org/2005/Atom'
+                        })
     channel = etree.SubElement(rss, "channel")
 
     etree.SubElement(channel, "title").text = title
@@ -228,21 +294,53 @@ def create_channel(title: str, link: str, description: str):
     return rss, channel
 
 def add_paper_to_channel(channel, paper: dict):
-    """Add a paper to an RSS channel."""
+    """Add a paper to an RSS channel with proper metadata."""
     item = etree.SubElement(channel, "item")
+    
+    # Title
     etree.SubElement(item, "title").text = paper['title']
+    
+    # Link (PubMed URL)
     etree.SubElement(item, "link").text = paper['url']
+    
+    # GUID (unique identifier)
     etree.SubElement(item, "guid").text = paper['url']
     
-    # Create description with abstract and metadata
-    description = f"<b>Journal:</b> {paper['journal']}<br/><br/>"
-    if paper['abstract']:
-        description += f"<b>Abstract:</b> {paper['abstract']}"
-    else:
-        description += "<i>No abstract available</i>"
+    # Author (DC:Creator for RSS readers)
+    # Many RSS readers recognize dc:creator for author display
+    dc_creator = etree.SubElement(item, "{http://purl.org/dc/elements/1.1/}creator")
+    dc_creator.text = paper['authors']
     
+    # Publication date (RFC 822 format - critical for proper date display)
+    etree.SubElement(item, "pubDate").text = paper['rfc822_date']
+    
+    # Create rich description with all metadata
+    description_parts = []
+    
+    # Authors
+    description_parts.append(f"<b>Authors:</b> {paper['authors']}")
+    
+    # Journal with DOI if available
+    journal_line = f"<b>Journal:</b> {paper['journal']}"
+    if paper['doi']:
+        journal_line += f" | <b>DOI:</b> <a href='https://doi.org/{paper['doi']}'>{paper['doi']}</a>"
+    description_parts.append(journal_line)
+    
+    # Publication date (human readable)
+    description_parts.append(f"<b>Published:</b> {paper['date']}")
+    
+    # PubMed ID
+    description_parts.append(f"<b>PMID:</b> <a href='{paper['url']}'>{paper['pmid']}</a>")
+    
+    # Abstract
+    description_parts.append("<br/><br/>")
+    if paper['abstract']:
+        description_parts.append(f"<b>Abstract:</b><br/>{paper['abstract']}")
+    else:
+        description_parts.append("<i>No abstract available</i>")
+    
+    description = "<br/>".join(description_parts)
     etree.SubElement(item, "description").text = description
-    etree.SubElement(item, "pubDate").text = paper['date']
 
 # --------------------------------------------------
 # MAIN
