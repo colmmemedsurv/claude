@@ -31,23 +31,33 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: Run RSS filter
+      - name: Run main RSS filter
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           python filter_pubmed.py
       
-      - name: Upload filtered feed as artifact
+      - name: Run Best Of selection
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          cd best_of
+          python select_best.py
+      
+      - name: Upload all feeds as artifacts
         uses: actions/upload-artifact@v4
         with:
           name: filtered-rss-feeds
-          path: output/
+          path: |
+            output/
+            best_of/best_of_feed.xml
           retention-days: 30
       
-      - name: Commit and push filtered feeds
+      - name: Commit and push all feeds
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add output/
+          git add best_of/best_of_feed.xml
           git diff --staged --quiet || git commit -m "Update filtered RSS feeds - $(date +'%Y-%m-%d %H:%M:%S')"
           git push
