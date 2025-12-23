@@ -4,7 +4,15 @@
     <title>Filtered PubMed – Head and Neck Cancer</title>
     <link>https://pubmed.ncbi.nlm.nih.gov</link>
     <description>Papers classified as related to head and neck cancer (last 7 days)</description>
-    <lastBuildDate>Tue, 23 Dec 2025 00:17:31 +0000</lastBuildDate>
+    <lastBuildDate>Tue, 23 Dec 2025 00:48:14 +0000</lastBuildDate>
+    <item>
+      <title>Tumor Vascular Area Quantification Predicts Survival Outcomes in Oral Squamous Cell Carcinoma.</title>
+      <link>https://pubmed.ncbi.nlm.nih.gov/41428856/</link>
+      <guid>https://pubmed.ncbi.nlm.nih.gov/41428856/</guid>
+      <dc:creator>Yu L, Li F, Wang J, Xue Y, Zeng T, Huang X, Zhang L, Deng R, Wang S</dc:creator>
+      <pubDate>Mon, 22 Dec 2025 12:00:00 +0000</pubDate>
+      <description>&lt;b&gt;Authors:&lt;/b&gt; Yu L, Li F, Wang J, Xue Y, Zeng T, Huang X, Zhang L, Deng R, Wang S&lt;br/&gt;&lt;b&gt;Journal:&lt;/b&gt; Oral diseases | &lt;b&gt;DOI:&lt;/b&gt; &lt;a href='https://doi.org/10.1111/odi.70174'&gt;10.1111/odi.70174&lt;/a&gt;&lt;br/&gt;&lt;b&gt;Published:&lt;/b&gt; 2025-Dec-22&lt;br/&gt;&lt;b&gt;PMID:&lt;/b&gt; &lt;a href='https://pubmed.ncbi.nlm.nih.gov/41428856/'&gt;41428856&lt;/a&gt;&lt;br/&gt;&lt;br/&gt;&lt;br/&gt;&lt;br/&gt;&lt;b&gt;Abstract:&lt;/b&gt;&lt;br/&gt;BACKGROUND: Cancer cells remodel blood vessels to create a tumor-supportive environment; however, the spatial distribution of these vessels and their prognostic significance in oral squamous cell carcinoma (OSCC) remain poorly defined. METHODS: We established an open-source pipeline to quantify vascular area (VA) in both the inner tumor (InT) and invasive tumor front (ITF) regions from CD31-stained whole-slide images (discovery cohort, n = 66). The associations between VA and patient survival were assessed via univariate and multivariate analyses. Findings were validated in an independent cohort (n = 70) immunostained with CD34. RESULTS: VA was significantly higher in the InT region compared to the ITF (p = 0.0079). A higher VA in the ITF was independently associated with favorable overall survival (discovery: HR 0.28, 95% CI 0.11-0.73, p = 0.009; validation: HR 0.18, 95% CI 0.07-0.47, p &lt; 0.001) and disease-free survival (discovery: HR 0.34, 95% CI 0.14-0.81, p = 0.015; validation: HR 0.25, 95% CI 0.11-0.53, p &lt; 0.001). CONCLUSION: Our findings provide the first evidence that high VA in the ITF is associated with a better prognosis in OSCC.</description>
+    </item>
     <item>
       <title>INDUCE-3: A randomized Phase II/III study of first-line feladilimab plus pembrolizumab in patients with recurrent/metastatic head and neck squamous cell carcinoma.</title>
       <link>https://pubmed.ncbi.nlm.nih.gov/41427951/</link>
