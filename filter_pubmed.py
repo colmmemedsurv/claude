@@ -374,6 +374,30 @@ def add_paper_to_channel(channel, paper: dict):
     etree.SubElement(item, "description").text = description
 
 # --------------------------------------------------
+# LOGGING
+# --------------------------------------------------
+def log_run_outcome(total_found: int, accepted: int, rejected: int):
+    """
+    Append run outcome to output/call_outcome.txt
+    Creates a running log of all executions.
+    """
+    log_file = "output/call_outcome.txt"
+    
+    # Get current timestamp
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Create log entry
+    log_entry = f"{timestamp} | Found: {total_found} | Accepted: {accepted} | Rejected: {rejected}\n"
+    
+    # Append to log file (creates file if it doesn't exist)
+    try:
+        with open(log_file, 'a', encoding='utf-8') as f:
+            f.write(log_entry)
+        print(f"✓ Logged run outcome to {log_file}")
+    except Exception as e:
+        print(f"⚠ Warning: Could not write to log file: {e}")
+
+# --------------------------------------------------
 # MAIN
 # --------------------------------------------------
 def main():
@@ -501,6 +525,9 @@ def main():
         encoding="UTF-8"
     )
     
+    # Step 6: Log run outcome
+    log_run_outcome(len(pmids), accepted_count, rejected_count)
+    
     # Summary
     print("\n" + "=" * 60)
     print("✓ COMPLETED SUCCESSFULLY")
@@ -512,6 +539,7 @@ def main():
     print(f"\n📁 Output files:")
     print(f"   • {OUTPUT_ACCEPTED}")
     print(f"   • {OUTPUT_REJECTED}")
+    print(f"   • output/call_outcome.txt")
     print()
 
 if __name__ == "__main__":
