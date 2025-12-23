@@ -48,6 +48,7 @@ SPECIAL CONSIDERATIONS:
 - Consider potential to change practice patterns
 - Recognize rare tumor studies may have smaller N but high importance
 - Value health disparities and population health impact
+- Generally favor studies relating to systemic treatment
 
 When uncertain, favor studies that:
 1. Address important clinical questions
